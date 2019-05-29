@@ -1,23 +1,31 @@
 package main
 
 import (
+	"sync"
+
 	r "github.com/dancannon/gorethink"
 	"github.com/gorilla/websocket"
+	"gopkg.in/olivere/elastic.v6"
 )
 
 // FindHandler defines signature's method
 type FindHandler func(string) (Handler, bool)
 
 type Client struct {
-	send         chan Message
-	socket       *websocket.Conn
-	findHandler  FindHandler
-	session      *r.Session
-	stopChannels map[int]chan bool
-	id           string
-	userName     string
-	user         User
+	send          chan Message
+	socket        *websocket.Conn
+	findHandler   FindHandler
+	session       *r.Session
+	stopChannels  map[int]chan bool
+	id            string
+	userName      string
+	user          User
+	elasticClient *elastic.Client
 }
+
+var (
+	MapMutex = sync.RWMutex{}
+)
 
 func (client *Client) Read() {
 	var message Message
@@ -62,12 +70,13 @@ func (client *Client) StopForKey(key int) {
 	}
 }
 
-func NewClient(socket *websocket.Conn, findHandler FindHandler, session *r.Session) *Client {
+func NewClient(socket *websocket.Conn, findHandler FindHandler, session *r.Session, elasticClient *elastic.Client) *Client {
 	return &Client{
-		send:         make(chan Message),
-		socket:       socket,
-		findHandler:  findHandler,
-		session:      session,
-		stopChannels: make(map[int]chan bool),
+		send:          make(chan Message),
+		socket:        socket,
+		findHandler:   findHandler,
+		session:       session,
+		stopChannels:  make(map[int]chan bool),
+		elasticClient: elasticClient,
 	}
 }

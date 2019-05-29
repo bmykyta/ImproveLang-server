@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	elastic "gopkg.in/olivere/elastic.v6"
+
 	r "github.com/dancannon/gorethink"
 )
 
@@ -59,10 +61,15 @@ func main() {
 		Address:  "172.17.0.2:28015",
 		Database: "improvelang",
 	})
+	fmt.Println("Every time updated?")
 	if err != nil {
 		log.Panic(err.Error())
 	}
-	router := NewRouter(session)
+	elasticClient, err := elastic.NewClient(elastic.SetURL("http://localhost:9200"))
+	if err != nil {
+		panic(err)
+	}
+	router := NewRouter(session, elasticClient)
 
 	router.Handle("channel add", addChannel)
 	router.Handle("channel subscribe", subscribeChannel)
@@ -79,19 +86,32 @@ func main() {
 	router.Handle("google signup", googleSignUp)
 	router.Handle("google login", googleLogin)
 	router.Handle("check login", checkLogin)
+	router.Handle("send contact-form", contactForm)
+	router.Handle("search channels", searchChannels)
 
-	http.HandleFunc("/login", handleLogin)
-	http.HandleFunc("/callback", handleCallback)
-	http.HandleFunc("/google/callback", handleGoogleCallback)
+	// http.HandleFunc("/login", handleLogin)
+	// http.HandleFunc("/callback", handleCallback)
+	// http.HandleFunc("/google/callback", handleGoogleCallback)
 
-	http.HandleFunc("/setUser", handleSetUser)
+	// http.HandleFunc("/setUser", handleSetUser)
 
 	http.Handle("/chat", router)
 
+	// portPrefix := ":"
+	// port := os.Getenv("PORT")
+
+	// if port == "" {
+	// 	port = "4000"
+	// }
+
+	// fmt.Printf("Server start at port %v", portPrefix+port)
 	fmt.Println("Server start at port :4000")
-	// http.ListenAndServe(":4000", nil)
+	// if err = http.ListenAndServe(portPrefix+port, nil); err != nil {
+	// 	log.Fatal(err.Error())
+	// }
 	if err = http.ListenAndServeTLS(":4000", "./cert/server.crt", "./cert/server.key", nil); err != nil {
 		log.Fatal(err.Error())
+		fmt.Println(err.Error())
 	}
 }
 

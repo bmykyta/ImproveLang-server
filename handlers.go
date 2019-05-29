@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 
 	r "github.com/dancannon/gorethink"
 	"github.com/mitchellh/mapstructure"
+	"gopkg.in/olivere/elastic.v6"
 )
 
 const (
@@ -26,6 +29,10 @@ type ChannelMessage struct {
 	UserID      string    `gorethink:"user_id"`
 	Attachments string    `gorethink:"attachments"`
 	CreatedAt   time.Time `gorethink:"created_at"`
+}
+
+type ChannelSearch struct {
+	SearchRequest string `json:"channel"`
 }
 
 func editUser(client *Client, data interface{}) {
@@ -55,7 +62,6 @@ func subscribeUser(client *Client, data interface{}) {
 		cursor, err := r.Table("user").
 			Changes(r.ChangesOpts{IncludeInitial: true}).
 			Run(client.session)
-
 		if err != nil {
 			client.send <- Message{"error", err.Error()}
 			return
@@ -143,6 +149,7 @@ func subscribeChannel(client *Client, data interface{}) {
 		cursor, err := r.Table("channel").
 			Changes(r.ChangesOpts{IncludeInitial: true}).
 			Run(client.session)
+
 		if err != nil {
 			client.send <- Message{"error", err.Error()}
 			return
@@ -158,9 +165,6 @@ func googleSignUp(client *Client, data interface{}) {
 		client.send <- Message{"error", err.Error()}
 		return
 	}
-	// fmt.Printf("sign USER DATA %#v\n", data)
-	// fmt.Printf("signed USER  %#v\n", user)
-	// check if user exists
 	cursor, err := r.Table("user").
 		Filter(map[string]interface{}{"auth_service_id": user.AuthServiceID}).
 		Run(client.session)
@@ -176,7 +180,6 @@ func googleSignUp(client *Client, data interface{}) {
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		fmt.Println("User exists!!")
 		client.user = user
 		client.id = user.ID
 		client.userName = user.Name
@@ -187,7 +190,10 @@ func googleSignUp(client *Client, data interface{}) {
 	}
 	usr := strings.Split(strings.ToLower(user.Name), " ")
 	user.Status = "Online"
-	user.Username = usr[0] + "_" + usr[1]
+	user.Username = usr[0]
+	if usr[1] != "" {
+		user.Username += "_" + usr[1]
+	}
 	user.CreatedAt = time.Now()
 
 	res, err := r.Table("user").Insert(user).RunWrite(client.session)
@@ -237,6 +243,100 @@ func googleLogin(client *Client, data interface{}) {
 	}
 
 	// client.send <- Message{"check login", "User logged in!"}
+}
+
+func searchChannels(client *Client, data interface{}) {
+	searchQuery := data.(map[string]interface{})
+
+	// search, err := client.elasticClient.
+	// 	Get().
+	// 	Index("vehicles").Type("car").Id("123").
+	// 	Do(context.Background())
+	// var channelSearch ChannelSearch
+
+	// indexParams := `{
+	// 	"settings":{
+	// 		"number_of_shards":1,
+	// 		"number_of_replicas":0
+	// 	},
+	// 	"mappings":{
+	// 		"channel":{
+	// 			"properties": {
+	// 				"name":{
+	// 					"type":"text"
+	// 				},
+	// 				"purpose":{
+	// 					"type":"text"
+	// 				},
+	// 				"channel_type":{
+	// 					"type":"text"
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }`
+	// createRes, err := client.elasticClient.CreateIndex("channels").BodyString(indexParams).Do(context.Background())
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// fmt.Printf("create reposne %#v\n", createRes)
+	fmt.Printf("data in map %#v\n", searchQuery["channel"])
+	// err := json.Unmarshal(data.([]byte), &channelSearch)
+	termQuery := elastic.NewTermQuery("purpose", searchQuery["channel"])
+	searchChannel, err := client.elasticClient.
+		Search().
+		Index("channels").
+		Query(termQuery).
+		// Sort("name", true).
+		// From(0).Size(10).
+		Do(context.Background())
+
+	if err != nil {
+		// switch {
+		// case elastic.IsNotFound(err):
+		// 	panic(fmt.Sprintf("Document not found: %v", err))
+		// case elastic.IsTimeout(err):
+		// 	panic(fmt.Sprintf("Timeout retrieving document: %v", err))
+		// case elastic.IsConnErr(err):
+		// 	panic(fmt.Sprintf("Connection problem: %v", err))
+		// default:
+		// 	panic(err)
+		// }
+		fmt.Println(err.Error())
+	}
+
+	var date map[string]interface{}
+	fmt.Printf("total fucking hist %#v\n", searchChannel.TotalHits())
+	if searchChannel.TotalHits() > 0 {
+		fmt.Printf("Found a total of %d channels\n", searchChannel.TotalHits())
+
+		// Iterate through results
+		for _, hit := range searchChannel.Hits.Hits {
+			// hit.Index contains the name of the index
+
+			// Deserialize hit.Source into a Tweet (could also be just a map[string]interface{}).
+			err := json.Unmarshal(*hit.Source, &date)
+			if err != nil {
+				fmt.Printf("There might be an error %v", err.Error())
+			}
+
+			// Work with tweet
+			fmt.Printf("Channels by %v\n", date)
+			client.send <- Message{"more channels", date}
+		}
+	} else {
+		// No hits
+		fmt.Print("Found no channels\n")
+	}
+
+	// var date map[string]interface{}
+	// err = json.Unmarshal(search.Source, &date)
+	// if err != nil {
+	// 	fmt.Println(err.Error())
+	// }
+	// fmt.Printf("Got data from source: %#v\n", date)
+	// client.send <- Message{"more channels", date}
 }
 
 func checkLogin(client *Client, data interface{}) {
@@ -306,6 +406,11 @@ func changeFeedHelper(cursor *r.Cursor, changeEventName string, send chan<- Mess
 			send <- Message{eventName, data}
 		}
 	}
+}
+
+func contactForm(client *Client, data interface{}) {
+	formValues := data.(map[string]interface{})
+	fmt.Printf("contact form %#v\n", formValues)
 }
 
 func Check(handler http.Handler) http.Handler {

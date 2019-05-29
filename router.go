@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"gopkg.in/olivere/elastic.v6"
+
 	r "github.com/dancannon/gorethink"
 	"github.com/gorilla/websocket"
 )
@@ -19,15 +21,17 @@ type Handler func(*Client, interface{})
 
 // Router struct that stores rules to WebSocket
 type Router struct {
-	rules   map[string]Handler
-	session *r.Session
+	rules         map[string]Handler
+	session       *r.Session
+	elasticClient *elastic.Client
 }
 
 // NewRouter inciated Router
-func NewRouter(session *r.Session) *Router {
+func NewRouter(session *r.Session, elasticClient *elastic.Client) *Router {
 	return &Router{
-		rules:   make(map[string]Handler),
-		session: session,
+		rules:         make(map[string]Handler),
+		session:       session,
+		elasticClient: elasticClient,
 	}
 }
 
@@ -48,8 +52,7 @@ func (e *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, err.Error())
 		return
 	}
-
-	client := NewClient(socket, e.FindHandler, e.session)
+	client := NewClient(socket, e.FindHandler, e.session, e.elasticClient)
 	defer client.Close()
 	go client.Write()
 	client.Read()
