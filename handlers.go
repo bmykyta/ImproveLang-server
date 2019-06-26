@@ -35,6 +35,13 @@ type ChannelSearch struct {
 	SearchRequest string `json:"channel"`
 }
 
+type ElasticResult struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Purpose string `json:"purpose"`
+	Type    string `json:"type"`
+}
+
 func editUser(client *Client, data interface{}) {
 	var user User
 	err := mapstructure.Decode(data, &user)
@@ -70,6 +77,22 @@ func subscribeUser(client *Client, data interface{}) {
 	}()
 }
 
+func changeUsername(client *Client, data interface{}) {
+	username := data.(map[string]interface{})
+	client.user.Username = username["username"].(string)
+	client.userName = username["username"].(string)
+
+	go func() {
+		err := r.Table("user").
+			Update(client.user).
+			Exec(client.session)
+
+		if err != nil {
+			client.send <- Message{"error", err.Error()}
+		}
+	}()
+}
+
 func unsubscribeUser(client *Client, data interface{}) {
 	client.StopForKey(UserStop)
 }
@@ -87,6 +110,24 @@ func addChannelMessage(client *Client, data interface{}) {
 		channelMessage.Username = client.user.Username
 		err := r.Table("message").
 			Insert(channelMessage).
+			Exec(client.session)
+
+		if err != nil {
+			client.send <- Message{"error", err.Error()}
+		}
+	}()
+}
+
+func deleteChannelMessage(client *Client, data interface{}) {
+	var channelMessage ChannelMessage
+	err := mapstructure.Decode(data, &channelMessage)
+	if err != nil {
+		client.send <- Message{"error", err.Error()}
+	}
+	go func() {
+		err := r.Table("message").
+			Get(channelMessage.Id).
+			Delete().
 			Exec(client.session)
 
 		if err != nil {
@@ -133,10 +174,21 @@ func addChannel(client *Client, data interface{}) {
 		client.send <- Message{"error", err.Error()}
 		return
 	}
+	channel.Type = "public"
 	go func() {
 		err = r.Table("channel").
 			Insert(channel).
 			Exec(client.session)
+
+		if err != nil {
+			client.send <- Message{"error", err.Error()}
+		}
+		put1, err := client.elasticClient.Index().
+			Index("channels").
+			Type("channel").
+			BodyJson(channel).
+			Do(context.Background())
+		fmt.Printf("elastica index %#v\n", put1)
 		if err != nil {
 			client.send <- Message{"error", err.Error()}
 		}
@@ -250,7 +302,7 @@ func searchChannels(client *Client, data interface{}) {
 
 	// search, err := client.elasticClient.
 	// 	Get().
-	// 	Index("vehicles").Type("car").Id("123").
+	// 	Index("channels").Type("channel").Id("123").
 	// 	Do(context.Background())
 	// var channelSearch ChannelSearch
 
@@ -280,10 +332,10 @@ func searchChannels(client *Client, data interface{}) {
 	// 	panic(err)
 	// }
 
-	// fmt.Printf("create reposne %#v\n", createRes)
-	fmt.Printf("data in map %#v\n", searchQuery["channel"])
 	// err := json.Unmarshal(data.([]byte), &channelSearch)
+	searchQuery["channel"] = strings.ToLower(strings.TrimSpace(searchQuery["channel"].(string)))
 	termQuery := elastic.NewTermQuery("purpose", searchQuery["channel"])
+
 	searchChannel, err := client.elasticClient.
 		Search().
 		Index("channels").
@@ -293,50 +345,38 @@ func searchChannels(client *Client, data interface{}) {
 		Do(context.Background())
 
 	if err != nil {
-		// switch {
-		// case elastic.IsNotFound(err):
-		// 	panic(fmt.Sprintf("Document not found: %v", err))
-		// case elastic.IsTimeout(err):
-		// 	panic(fmt.Sprintf("Timeout retrieving document: %v", err))
-		// case elastic.IsConnErr(err):
-		// 	panic(fmt.Sprintf("Connection problem: %v", err))
-		// default:
-		// 	panic(err)
-		// }
-		fmt.Println(err.Error())
+		switch {
+		case elastic.IsNotFound(err):
+			panic(fmt.Sprintf("Document not found: %v", err))
+		case elastic.IsTimeout(err):
+			panic(fmt.Sprintf("Timeout retrieving document: %v", err))
+		case elastic.IsConnErr(err):
+			panic(fmt.Sprintf("Connection problem: %v", err))
+		default:
+			panic(err)
+		}
 	}
 
-	var date map[string]interface{}
-	fmt.Printf("total fucking hist %#v\n", searchChannel.TotalHits())
+	elasticResultSlice := []ElasticResult{}
+	elResult := ElasticResult{}
+
 	if searchChannel.TotalHits() > 0 {
-		fmt.Printf("Found a total of %d channels\n", searchChannel.TotalHits())
 
-		// Iterate through results
 		for _, hit := range searchChannel.Hits.Hits {
-			// hit.Index contains the name of the index
-
-			// Deserialize hit.Source into a Tweet (could also be just a map[string]interface{}).
-			err := json.Unmarshal(*hit.Source, &date)
+			// Deserialize hit.Source into a channel data (could also be just a map[string]interface{}).
+			err := json.Unmarshal(*hit.Source, &elResult)
 			if err != nil {
 				fmt.Printf("There might be an error %v", err.Error())
 			}
-
-			// Work with tweet
-			fmt.Printf("Channels by %v\n", date)
-			client.send <- Message{"more channels", date}
+			elResult.ID = hit.Id
+			elasticResultSlice = append(elasticResultSlice, elResult)
 		}
-	} else {
-		// No hits
-		fmt.Print("Found no channels\n")
-	}
+		client.send <- Message{"more channels", elasticResultSlice}
 
-	// var date map[string]interface{}
-	// err = json.Unmarshal(search.Source, &date)
-	// if err != nil {
-	// 	fmt.Println(err.Error())
-	// }
-	// fmt.Printf("Got data from source: %#v\n", date)
-	// client.send <- Message{"more channels", date}
+	} else {
+		fmt.Print("Found no channels\n")
+		client.send <- Message{"error", "No channels found"}
+	}
 }
 
 func checkLogin(client *Client, data interface{}) {
@@ -375,6 +415,8 @@ func checkLogin(client *Client, data interface{}) {
 	response["username"] = user.Username
 	response["status"] = user.Status
 	response["created_at"] = user.CreatedAt
+	response["id"] = user.ID
+
 	client.send <- Message{"check login", response}
 }
 

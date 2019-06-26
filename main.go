@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	elastic "gopkg.in/olivere/elastic.v6"
@@ -61,11 +62,10 @@ func main() {
 		Address:  "172.17.0.2:28015",
 		Database: "improvelang",
 	})
-	fmt.Println("Every time updated?")
 	if err != nil {
 		log.Panic(err.Error())
 	}
-	elasticClient, err := elastic.NewClient(elastic.SetURL("http://localhost:9200"))
+	elasticClient, err := elastic.NewClient(elastic.SetURL("http://172.17.0.1:9200")) // localhost
 	if err != nil {
 		panic(err)
 	}
@@ -75,11 +75,13 @@ func main() {
 	router.Handle("channel subscribe", subscribeChannel)
 	router.Handle("channel unsubscribe", unsubscribeChannel)
 
+	router.Handle("change username", changeUsername)
 	router.Handle("user edit", editUser)
 	router.Handle("user subscribe", subscribeUser)
 	router.Handle("user unsubscribe", unsubscribeUser)
 
 	router.Handle("message add", addChannelMessage)
+	router.Handle("message delete", deleteChannelMessage)
 	router.Handle("message subscribe", subscribeChannelMessage)
 	router.Handle("message unsubscribe", unsubscribeChannelMessage)
 
@@ -97,27 +99,18 @@ func main() {
 
 	http.Handle("/chat", router)
 
-	// portPrefix := ":"
-	// port := os.Getenv("PORT")
-
-	// if port == "" {
-	// 	port = "4000"
-	// }
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "4000"
+	}
 
 	// fmt.Printf("Server start at port %v", portPrefix+port)
-	fmt.Println("Server start at port :4000")
-	// if err = http.ListenAndServe(portPrefix+port, nil); err != nil {
+	log.Printf("Server start at port :%v", port)
+	// if err = http.ListenAndServe(":"+port, nil); err != nil {
 	// 	log.Fatal(err.Error())
 	// }
-	if err = http.ListenAndServeTLS(":4000", "./cert/server.crt", "./cert/server.key", nil); err != nil {
+	if err = http.ListenAndServeTLS(":"+port, "./cert/server.crt", "./cert/server.key", nil); err != nil {
 		log.Fatal(err.Error())
 		fmt.Println(err.Error())
-	}
-}
-
-func logFatalErr(err error) {
-	if err != nil {
-		log.Fatal(err)
-		return
 	}
 }
